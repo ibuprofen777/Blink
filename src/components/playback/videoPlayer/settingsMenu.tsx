@@ -20,6 +20,10 @@ import {
 	changeSubtitleTrack,
 	usePlaybackStore,
 } from "@/utils/store/playback";
+import {
+	loadDanmakuSettings,
+	saveDanmakuSettings,
+} from "@/utils/danmaku";
 
 type VideoPlayerSettingsMenuProps = {
 	settingsMenuRef: HTMLButtonElement | null;
@@ -51,6 +55,20 @@ const VideoPlayerSettingsMenu = ({
 	);
 
 	const [subtitleIsChanging, startSubtitleChange] = useTransition();
+	const [danmakuEnabled, setDanmakuEnabled] = React.useState(
+		() => loadDanmakuSettings().enabled,
+	);
+	const toggleDanmaku = useCallback(() => {
+		setDanmakuEnabled((previous) => {
+			const next = !previous;
+			saveDanmakuSettings({
+				...loadDanmakuSettings(),
+				enabled: next,
+			});
+			window.dispatchEvent(new CustomEvent("blink-danmaku-settings"));
+			return next;
+		});
+	}, []);
 	const handleSubtitleChange: ChangeEventHandler<
 		HTMLInputElement | HTMLTextAreaElement
 	> = useCallback(
@@ -146,6 +164,16 @@ const VideoPlayerSettingsMenu = ({
 				))}
 			</TextField>
 			<MenuList disablePadding>
+				<MenuItem onClick={toggleDanmaku}>
+					<Typography
+						sx={{
+							flexGrow: 1,
+						}}
+					>
+						Danmaku
+					</Typography>
+					<Switch checked={danmakuEnabled} />
+				</MenuItem>
 				<MenuItem onClick={toggleShowStatsForNerds}>
 					<Typography
 						sx={{

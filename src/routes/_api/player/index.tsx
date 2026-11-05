@@ -33,6 +33,12 @@ import { useCentralStore } from "@/utils/store/central";
 import useQueue, { clearQueue } from "@/utils/store/queue";
 import type subtitlePlaybackInfo from "@/utils/types/subtitlePlaybackInfo";
 import font from "./Noto-Sans-Indosphere.ttf?url";
+import {
+	DanmakuRenderer,
+	fetchDanmakuXml,
+	parseDanmakuXml,
+	loadDanmakuSettings,
+} from "@/utils/danmaku";
 
 /**
  * This function is used to add a subtitle track (.vtt and .srt) to the react player instance.
@@ -517,6 +523,54 @@ export function VideoPlayer() {
 		isPlayerReady,
 		api,
 	]);
+
+	// Manage Danmaku playback
+	const danmakuRendererRef = useRef<DanmakuRenderer | null>(null);
+
+	useEffect(() => {
+		const video = player.current;
+		if (!video || !itemId || !api) return;
+
+		// Re-create the renderer per item so the canvas tracks the current
+		// video element and stale comments from the previous item are gone.
+		danmakuRendererRef.current?.dispose();
+		let renderer: DanmakuRenderer | null = null;
+		let cancelled = false;
+
+		try {
+			renderer = new DanmakuRenderer(video, loadDanmakuSettings());
+			danmakuRendererRef.current = renderer;
+		} catch (error) {
+			console.warn("Danmaku renderer unavailable", error);
+			return;
+		}
+
+		const onSettingsChanged = () => {
+			renderer?.setSettings(loadDanmakuSettings());
+		};
+		window.addEventListener("blink-danmaku-settings", onSettingsChanged);
+
+		fetchDanmakuXml(api.basePath ?? "", itemId, api.accessToken)
+			.then((xml) => {
+				if (cancelled || !renderer) return;
+				renderer.setComments(xml ? parseDanmakuXml(xml) : []);
+			})
+			.catch(() => {
+				/* no danmaku for this item */
+			});
+
+		return () => {
+			cancelled = true;
+			window.removeEventListener(
+				"blink-danmaku-settings",
+				onSettingsChanged,
+			);
+			renderer?.dispose();
+			if (danmakuRendererRef.current === renderer) {
+				danmakuRendererRef.current = null;
+			}
+		};
+	}, [itemId, api, isPlayerReady]);
 
 	const handlePlaybackEnded = useCallback(() => {
 		if (queue?.length !== currentQueueItemIndex + 1) {
