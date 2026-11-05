@@ -39,6 +39,7 @@ import {
 	parseDanmakuXml,
 	loadDanmakuSettings,
 } from "@/utils/danmaku";
+import { GamepadController } from "@/utils/gamepad";
 
 /**
  * This function is used to add a subtitle track (.vtt and .srt) to the react player instance.
@@ -452,6 +453,34 @@ export function VideoPlayer() {
 			document.removeEventListener("keydown", handleKeyPress);
 		};
 	}, [handleKeyPress]);
+
+	// Gamepad support: polls the Gamepad API and dispatches synthetic events
+	// that map to the handlers below.
+	const gamepadRef = useRef<GamepadController | null>(null);
+
+	useEffect(() => {
+		const controller = new GamepadController();
+		gamepadRef.current = controller;
+		controller.start();
+
+		const onExit = () => handleExitPlayer();
+		const onNext = () => playItemFromQueue("next", user?.Id, api);
+		const onPrev = () => playItemFromQueue("previous", user?.Id, api);
+
+		window.addEventListener("blink-gamepad-exit", onExit);
+		window.addEventListener("blink-gamepad-next", onNext);
+		window.addEventListener("blink-gamepad-prev", onPrev);
+
+		return () => {
+			window.removeEventListener("blink-gamepad-exit", onExit);
+			window.removeEventListener("blink-gamepad-next", onNext);
+			window.removeEventListener("blink-gamepad-prev", onPrev);
+			controller.dispose();
+			if (gamepadRef.current === controller) {
+				gamepadRef.current = null;
+			}
+		};
+	}, [handleExitPlayer, user?.Id, api]);
 
 	// Manage Subtitle playback
 	useEffect(() => {

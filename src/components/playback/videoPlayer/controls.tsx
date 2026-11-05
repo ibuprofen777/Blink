@@ -122,6 +122,25 @@ const VideoPlayerControls = ({
 	const [settingsMenuRef, setSettingsMenuRef] =
 		useState<HTMLButtonElement | null>(null);
 
+	// Gamepad Start/Y opens the settings menu (danmaku, subtitles, audio).
+	useEffect(() => {
+		const openSettings = () => {
+			// Toggling needs a currentTarget button; reuse the settings button
+			// element if present, else synthesize from the menu button's ref.
+			const button =
+				document.querySelector<HTMLButtonElement>(
+					"[data-settings-button]",
+				) ?? null;
+			setSettingsMenuRef((current) =>
+				current ? null : (button ?? document.createElement("button")),
+			);
+		};
+		window.addEventListener("blink-gamepad-settings", openSettings);
+		return () => {
+			window.removeEventListener("blink-gamepad-settings", openSettings);
+		};
+	}, []);
+
 	// const creditInfo = mediaSegments?.Items?.find(
 	// 	(segment) => segment.Type === "Outro",
 	// );
@@ -209,7 +228,10 @@ const VideoPlayerControls = ({
 				<IconButton onClick={handleExitPlayer}>
 					<span className="material-symbols-rounded">arrow_back</span>
 				</IconButton>
-				<IconButton onClick={(e) => setSettingsMenuRef(e.currentTarget)}>
+				<IconButton
+					data-settings-button
+					onClick={(e) => setSettingsMenuRef(e.currentTarget)}
+				>
 					<span className="material-symbols-rounded">settings</span>
 				</IconButton>
 				<VideoPlayerSettingsMenu
