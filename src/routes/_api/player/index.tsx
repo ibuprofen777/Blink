@@ -35,7 +35,7 @@ import type subtitlePlaybackInfo from "@/utils/types/subtitlePlaybackInfo";
 import font from "./Noto-Sans-Indosphere.ttf?url";
 import {
 	DanmakuRenderer,
-	fetchDanmakuXml,
+	fetchDanmakuOnline,
 	parseDanmakuXml,
 	loadDanmakuSettings,
 } from "@/utils/danmaku";
@@ -550,7 +550,14 @@ export function VideoPlayer() {
 		};
 		window.addEventListener("blink-danmaku-settings", onSettingsChanged);
 
-		fetchDanmakuXml(api.basePath ?? "", itemId, api.accessToken)
+		// danmu_api online source: match by title/season/episode.
+		const item = usePlaybackStore.getState().metadata.item;
+		const query = {
+			title: (item?.SeriesName || item?.Name) ?? "",
+			season: item?.ParentIndexNumber ?? 0,
+			episode: item?.IndexNumber ?? undefined,
+		};
+		fetchDanmakuOnline(query)
 			.then((xml) => {
 				if (cancelled || !renderer) return;
 				renderer.setComments(xml ? parseDanmakuXml(xml) : []);

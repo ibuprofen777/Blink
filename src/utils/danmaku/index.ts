@@ -74,6 +74,220 @@ export async function fetchDanmakuXml(
 	}
 }
 
+// ---------------------------------------------------------------------------
+// danmu_api (弹弹play-compatible online source)
+//
+// Flow: POST /api/v2/match with the item title → GET /api/v2/bangumi/{animeId}
+// for the episode list → GET /api/v2/comment/{episodeId}?format=xml.
+// Matches are cached by "title|season" so subsequent plays are instant.
+// ---------------------------------------------------------------------------
+
+const DANMU_API_BASE_DEFAULT = "http://192.168.1.11:9321";
+const MATCH_CACHE_KEY = "blink-danmaku-match-cache";
+const MATCH_CACHE_MAX = 64;
+
+interface DanmuApiEpisode {
+	episodeId: number;
+	episodeTitle: string;
+}
+
+interface DanmuApiMatch {
+	animeId: number;
+	animeTitle: string;
+}
+
+export interface DanmakuQuery {
+	/** Jellyfin item title, e.g. "风骚律师" */
+	title: string;
+	/** Season number, 0 for movies / specials */
+	season: number;
+	/** Episode number, undefined for movies */
+	episode?: number;
+}
+
+function danmuApiBase(): string {
+	try {
+		return (
+			localStorage.getItem("blink-danmaku-api-base") ||
+			DANMU_API_BASE_DEFAULT
+		);
+	} catch {
+		return DANMU_API_BASE_DEFAULT;
+	}
+}
+
+export function setDanmuApiBase(base: string): void {
+	localStorage.setItem("blink-danmaku-api-base", base.replace(/\/+$/, ""));
+}
+
+interface MatchCacheEntry {
+	animeId: number;
+	animeTitle: string;
+}
+
+function loadMatchCache(): Record<string, MatchCacheEntry> {
+	try {
+		return JSON.parse(localStorage.getItem(MATCH_CACHE_KEY) || "{}");
+	} catch {
+		return {};
+	}
+}
+
+function saveMatchCache(cache: Record<string, MatchCacheEntry>): void {
+	const entries = Object.entries(cache);
+	if (entries.length <= MATCH_CACHE_MAX) {
+		localStorage.setItem(MATCH_CACHE_KEY, JSON.stringify(cache));
+		return;
+	}
+	// Drop the oldest half; the cache has no timestamps, and re-matching is
+	// cheap, so a rough trim is fine.
+	const trimmed = Object.fromEntries(entries.slice(-MATCH_CACHE_MAX / 2));
+	localStorage.setItem(MATCH_CACHE_KEY, JSON.stringify(trimmed));
+}
+
+export function matchCacheKey(query: DanmakuQuery): string {
+	return `${query.title}|${query.season}`;
+}
+
+/** Resolve a title+season to a danmu_api anime. Cached across sessions. */
+export async function resolveAnime(
+	query: DanmakuQuery,
+): Promise<MatchCacheEntry | null> {
+	const cache = loadMatchCache();
+	const key = matchCacheKey(query);
+	const hit = cache[key];
+	if (hit) return hit;
+
+	const base = danmuApiBase();
+	const matchResponse = await fetch(`${base}/api/v2/match`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			fileName:
+				query.season > 0 ? `${query.title} S${pad(query.season)}` : query.title,
+		}),
+	});
+	if (!matchResponse.ok) return null;
+	const matchData = await matchResponse.json();
+	const matches: DanmuApiMatch[] = matchData.matches ?? [];
+	if (matches.length === 0) return null;
+
+	// Prefer a title that actually contains the season name; the match
+	// endpoint answers for the closest title, but the season list endpoint
+	// is authoritative for episode counts.
+	let chosen = matches[0];
+	for (const candidate of matches) {
+		if (
+			`${candidate.animeTitle}`.includes(
+				`第${chineseSeason(query.season)}季`,
+			)
+		) {
+			chosen = candidate;
+			break;
+		}
+	}
+
+	cache[key] = { animeId: chosen.animeId, animeTitle: chosen.animeTitle };
+	saveMatchCache(cache);
+	return cache[key];
+}
+
+function pad(n: number): string {
+	return n < 10 ? `0${n}` : String(n);
+}
+
+function chineseSeason(n: number): string {
+	const digits = "零一二三四五六七八九";
+	if (n <= 9) return digits[n] ?? String(n);
+	if (n === 10) return "十";
+	if (n < 20) return `十${digits[n - 10]}`;
+	return String(n);
+}
+
+/** All episodes of the resolved anime, ordered as the source lists them. */
+export async function fetchEpisodeList(
+	animeId: number,
+): Promise<DanmuApiEpisode[]> {
+	const base = danmuApiBase();
+	const response = await fetch(`${base}/api/v2/bangumi/${animeId}`);
+	if (!response.ok) return [];
+	const data = await response.json();
+	const bangumi = data.bangumi ?? data;
+	return (bangumi.episodes ?? []) as DanmuApiEpisode[];
+}
+
+function extractEpisodeNumber(title: string): number | null {
+	const patterns = [
+		/第\s*(\d+)\s*集/,
+		/第\s*(\d+)\s*话/,
+		/\bEP?\.?\s*(\d+)\b/i,
+		/^\s*(\d{1,4})\s*$/,
+	];
+	for (const pattern of patterns) {
+		const match = pattern.exec(title);
+		if (match) return Number.parseInt(match[1], 10);
+	}
+	return null;
+}
+
+/**
+ * Full online fetch: match → episode list → comment XML.
+ * Returns null when anything in the chain fails; callers fall back silently.
+ */
+export async function fetchDanmakuOnline(
+	query: DanmakuQuery,
+): Promise<string | null> {
+	try {
+		const anime = await resolveAnime(query);
+		if (!anime) return null;
+
+		let episodes = await fetchEpisodeList(anime.animeId);
+		if (episodes.length === 0) return null;
+
+		// Movies (no episode number): use the only episode.
+		if (query.episode == null) {
+			if (episodes.length !== 1) return null;
+			return fetchCommentXml(episodes[0].episodeId);
+		}
+
+		// Episodes: match by parsed number first, then by position when every
+		// title is numbered sequentially (e.g. bilibili's bare "1", "2", ...).
+		let target = episodes.find(
+			(episode) => extractEpisodeNumber(episode.episodeTitle) === query.episode,
+		);
+		if (!target) {
+			const positional = episodes.map((episode) =>
+				extractEpisodeNumber(episode.episodeTitle),
+			);
+			const startsAtOne = positional.every(
+				(value, index) => value === index + 1,
+			);
+			if (
+				startsAtOne &&
+				query.episode >= 1 &&
+				query.episode <= episodes.length
+			) {
+				target = episodes[query.episode - 1];
+			}
+		}
+		if (!target) return null;
+
+		return await fetchCommentXml(target.episodeId);
+	} catch {
+		return null;
+	}
+}
+
+async function fetchCommentXml(episodeId: number): Promise<string | null> {
+	const base = danmuApiBase();
+	const response = await fetch(
+		`${base}/api/v2/comment/${episodeId}?format=xml`,
+	);
+	if (!response.ok) return null;
+	const text = await response.text();
+	return text.trim() ? text : null;
+}
+
 function decodeNumericEntities(input: string): string {
 	return input.replace(NUMERIC_ENTITY_RE, (_match, hexMarker, digits) => {
 		const code = parseInt(digits, hexMarker ? 16 : 10);
