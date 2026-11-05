@@ -26,7 +26,9 @@ import {
 	loadDanmakuSettings,
 	saveDanmakuSettings,
 	type DanmakuSettings,
+	type DanmuApiMatch,
 } from "@/utils/danmaku";
+import DanmakuSourceDialog from "@/components/playback/videoPlayer/danmakuSourceDialog";
 
 type VideoPlayerSettingsMenuProps = {
 	settingsMenuRef: HTMLButtonElement | null;
@@ -48,13 +50,25 @@ const VideoPlayerSettingsMenu = ({
 		setIsBuffering,
 		showStatsForNerds,
 		toggleShowStatsForNerds,
+		itemName,
 	} = usePlaybackStore(
 		useShallow((state) => ({
 			mediaSource: state.mediaSource,
 			setIsBuffering: state.setIsBuffering,
 			showStatsForNerds: state.playerState.showStatsForNerds,
 			toggleShowStatsForNerds: state.toggleShowStatsForNerds,
+			itemName: state.metadata.item?.Name,
 		})),
+	);
+
+	const [sourceDialogOpen, setSourceDialogOpen] = React.useState(false);
+	const [pickedSource, setPickedSource] = React.useState<string | null>(null);
+	const handlePickSource = React.useCallback(
+		(anime: DanmuApiMatch) => {
+			setPickedSource(anime.animeTitle);
+			window.dispatchEvent(new CustomEvent("blink-danmaku-source-picked"));
+		},
+		[],
 	);
 
 	const [subtitleIsChanging, startSubtitleChange] = useTransition();
@@ -184,6 +198,33 @@ const VideoPlayerSettingsMenu = ({
 					</Typography>
 					<Switch checked={danmaku.enabled} />
 				</MenuItem>
+				{danmaku.enabled && (
+					<MenuItem
+						onClick={() => {
+							setSourceDialogOpen(true);
+						}}
+					>
+						<Typography
+							sx={{
+								flexGrow: 1,
+							}}
+						>
+							Danmaku Source
+						</Typography>
+						<Typography
+							sx={{
+								fontSize: "0.85em",
+								color: "text.secondary",
+								maxWidth: "10em",
+								overflow: "hidden",
+								textOverflow: "ellipsis",
+								whiteSpace: "nowrap",
+							}}
+						>
+							{pickedSource ?? "Search…"}
+						</Typography>
+					</MenuItem>
+				)}
 				<MenuItem onClick={toggleShowStatsForNerds}>
 					<Typography
 						sx={{
@@ -288,6 +329,12 @@ const VideoPlayerSettingsMenu = ({
 					/>
 				</Box>
 			)}
+			<DanmakuSourceDialog
+				open={sourceDialogOpen}
+				onClose={() => setSourceDialogOpen(false)}
+				itemTitle={itemName ?? ""}
+				onPick={handlePickSource}
+			/>
 		</Popover>
 	);
 };

@@ -103,7 +103,7 @@ interface DanmuApiEpisode {
 	episodeTitle: string;
 }
 
-interface DanmuApiMatch {
+export interface DanmuApiMatch {
 	animeId: number;
 	animeTitle: string;
 }
@@ -298,6 +298,46 @@ async function fetchCommentXml(episodeId: number): Promise<string | null> {
 	if (!response.ok) return null;
 	const text = await response.text();
 	return text.trim() ? text : null;
+}
+
+// ---------------------------------------------------------------------------
+// Manual source selection: search + pick anime + pick episode
+// ---------------------------------------------------------------------------
+
+/** Search danmu_api for animes matching a keyword. */
+export async function searchDanmakuAnimes(
+	keyword: string,
+): Promise<DanmuApiMatch[]> {
+	if (!keyword.trim()) return [];
+	const base = danmuApiBase();
+	const response = await fetch(
+		`${base}/api/v2/search/anime?keyword=${encodeURIComponent(keyword)}`,
+	);
+	if (!response.ok) return [];
+	const data = await response.json();
+	const animes = (data.animes ?? []) as (DanmuApiMatch & {
+		typeDescription?: string;
+	})[];
+	return animes.map((anime) => ({
+		animeId: anime.animeId,
+		animeTitle: anime.animeTitle,
+	}));
+}
+
+/**
+ * Pin a manual choice: stores it in the match cache under the current
+ * item's key so automatic resolution returns it next time.
+ */
+export function pinDanmakuMatch(
+	query: DanmakuQuery,
+	anime: DanmuApiMatch,
+): void {
+	const cache = loadMatchCache();
+	cache[matchCacheKey(query)] = {
+		animeId: anime.animeId,
+		animeTitle: anime.animeTitle,
+	};
+	saveMatchCache(cache);
 }
 
 function decodeNumericEntities(input: string): string {
