@@ -1,7 +1,9 @@
 import {
+	Box,
 	MenuItem,
 	MenuList,
 	Popover,
+	Slider,
 	Switch,
 	TextField,
 	Typography,
@@ -23,6 +25,7 @@ import {
 import {
 	loadDanmakuSettings,
 	saveDanmakuSettings,
+	type DanmakuSettings,
 } from "@/utils/danmaku";
 
 type VideoPlayerSettingsMenuProps = {
@@ -55,36 +58,25 @@ const VideoPlayerSettingsMenu = ({
 	);
 
 	const [subtitleIsChanging, startSubtitleChange] = useTransition();
-	const [danmakuEnabled, setDanmakuEnabled] = React.useState(
-		() => loadDanmakuSettings().enabled,
+	const [danmaku, setDanmaku] = React.useState<DanmakuSettings>(() =>
+		loadDanmakuSettings(),
 	);
-	const toggleDanmaku = useCallback(() => {
-		setDanmakuEnabled((previous) => {
-			const next = !previous;
-			saveDanmakuSettings({
-				...loadDanmakuSettings(),
-				enabled: next,
-			});
-			window.dispatchEvent(new CustomEvent("blink-danmaku-settings"));
-			return next;
-		});
-	}, []);
-	const handleSubtitleChange: ChangeEventHandler<
-		HTMLInputElement | HTMLTextAreaElement
-	> = useCallback(
-		(e) => {
-			startSubtitleChange(() => {
-				if (mediaSource.subtitle.allTracks) {
-					changeSubtitleTrack(
-						toNumber(e.target.value),
-						mediaSource.subtitle.allTracks,
-					);
-					handleClose();
-				}
+
+	const updateDanmaku = useCallback(
+		(patch: Partial<DanmakuSettings>) => {
+			setDanmaku((previous) => {
+				const next = { ...previous, ...patch };
+				saveDanmakuSettings(next);
+				window.dispatchEvent(new CustomEvent("blink-danmaku-settings"));
+				return next;
 			});
 		},
-		[mediaSource.subtitle?.allTracks],
+		[],
 	);
+
+	const toggleDanmaku = useCallback(() => {
+		updateDanmaku({ enabled: !loadDanmakuSettings().enabled });
+	}, [updateDanmaku]);
 
 	const [audioTackIsChanging, startAudioTrackChange] = useTransition();
 	const handleAudioTrackChange: ChangeEventHandler<
@@ -102,6 +94,23 @@ const VideoPlayerSettingsMenu = ({
 		// setPlaying(true);
 	};
 
+	const handleSubtitleChange: ChangeEventHandler<
+		HTMLInputElement | HTMLTextAreaElement
+	> = useCallback(
+		(e) => {
+			startSubtitleChange(() => {
+				if (mediaSource.subtitle.allTracks) {
+					changeSubtitleTrack(
+						toNumber(e.target.value),
+						mediaSource.subtitle.allTracks,
+					);
+					handleClose();
+				}
+			});
+		},
+		[mediaSource.subtitle?.allTracks],
+	);
+
 	return (
 		<Popover
 			anchorEl={settingsMenuRef}
@@ -110,13 +119,14 @@ const VideoPlayerSettingsMenu = ({
 			slotProps={{
 				paper: {
 					style: {
-						maxHeight: "20em",
+						maxHeight: "32em",
 						display: "flex",
 						flexDirection: "column",
 						gap: "1em",
-						width: "24em",
+						width: "26em",
 						padding: "1em",
 						borderRadius: "12px",
+						overflowY: "auto",
 					},
 					className: "glass",
 				},
@@ -172,7 +182,7 @@ const VideoPlayerSettingsMenu = ({
 					>
 						Danmaku
 					</Typography>
-					<Switch checked={danmakuEnabled} />
+					<Switch checked={danmaku.enabled} />
 				</MenuItem>
 				<MenuItem onClick={toggleShowStatsForNerds}>
 					<Typography
@@ -185,8 +195,142 @@ const VideoPlayerSettingsMenu = ({
 					<Switch checked={showStatsForNerds} />
 				</MenuItem>
 			</MenuList>
+
+			{danmaku.enabled && (
+				<Box
+					sx={{
+						display: "flex",
+						flexDirection: "column",
+						gap: 0.5,
+						padding: "0.75em",
+						borderRadius: "8px",
+						backgroundColor: "rgba(255,255,255,0.06)",
+					}}
+				>
+					<DanmakuSlider
+						label="Font Size"
+						min={14}
+						max={48}
+						step={1}
+						value={danmaku.fontSize}
+						format={(value) => `${value}px`}
+						onChange={(value) => updateDanmaku({ fontSize: value })}
+					/>
+					<DanmakuSlider
+						label="Opacity"
+						min={0.1}
+						max={1}
+						step={0.05}
+						value={danmaku.opacity}
+						format={(value) => `${Math.round(value * 100)}%`}
+						onChange={(value) => updateDanmaku({ opacity: value })}
+					/>
+					<DanmakuSlider
+						label="Display Area"
+						min={0.3}
+						max={1}
+						step={0.05}
+						value={danmaku.area}
+						format={(value) => `${Math.round(value * 100)}%`}
+						onChange={(value) => updateDanmaku({ area: value })}
+					/>
+					<DanmakuSlider
+						label="Speed"
+						min={0.5}
+						max={2}
+						step={0.1}
+						value={danmaku.speed}
+						format={(value) => `${value.toFixed(1)}x`}
+						onChange={(value) => updateDanmaku({ speed: value })}
+					/>
+					<DanmakuSlider
+						label="Max On Screen"
+						min={0}
+						max={100}
+						step={5}
+						value={danmaku.maxOnScreen}
+						format={(value) => (value === 0 ? "Unlimited" : String(value))}
+						onChange={(value) => updateDanmaku({ maxOnScreen: value })}
+					/>
+					<Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+						<Typography sx={{ flexGrow: 1, fontSize: "0.9em" }}>
+							Outline
+						</Typography>
+						<Switch
+							size="small"
+							checked={danmaku.outline}
+							onChange={(event) =>
+								updateDanmaku({ outline: event.target.checked })
+							}
+						/>
+					</Box>
+					<Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+						<Typography sx={{ flexGrow: 1, fontSize: "0.9em" }}>
+							Merge Duplicates
+						</Typography>
+						<Switch
+							size="small"
+							checked={danmaku.mergeDuplicates}
+							onChange={(event) =>
+								updateDanmaku({ mergeDuplicates: event.target.checked })
+							}
+						/>
+					</Box>
+					<TextField
+						label="Block Words (semicolon separated)"
+						variant="outlined"
+						size="small"
+						multiline
+						minRows={2}
+						value={danmaku.blockWords}
+						onChange={(event) => updateDanmaku({ blockWords: event.target.value })}
+						fullWidth
+					/>
+				</Box>
+			)}
 		</Popover>
 	);
 };
+
+type DanmakuSliderProps = {
+	label: string;
+	min: number;
+	max: number;
+	step: number;
+	value: number;
+	format: (value: number) => string;
+	onChange: (value: number) => void;
+};
+
+function DanmakuSlider({
+	label,
+	min,
+	max,
+	step,
+	value,
+	format,
+	onChange,
+}: DanmakuSliderProps) {
+	return (
+		<Box sx={{ padding: "0 0.5em" }}>
+			<Box sx={{ display: "flex", justifyContent: "space-between" }}>
+				<Typography sx={{ fontSize: "0.9em" }}>{label}</Typography>
+				<Typography sx={{ fontSize: "0.9em" }} color="text.secondary">
+					{format(value)}
+				</Typography>
+			</Box>
+			<Slider
+				size="small"
+				min={min}
+				max={max}
+				step={step}
+				value={value}
+				onChange={(_event, newValue) =>
+					onChange(Array.isArray(newValue) ? (newValue[0] as number) : (newValue as number))
+				}
+			/>
+		</Box>
+	);
+}
 
 export default VideoPlayerSettingsMenu;

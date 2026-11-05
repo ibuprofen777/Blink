@@ -29,6 +29,14 @@ export interface DanmakuSettings {
 	opacity: number; // 0.1 - 1
 	area: number; // 0.3 - 1, fraction of the player height
 	speed: number; // scroll speed multiplier
+	/** Max comments allowed on screen at once. 0 = unlimited. */
+	maxOnScreen: number;
+	/** Draw a visible outline behind glyphs for legibility on bright scenes. */
+	outline: boolean;
+	/** Merge consecutive identical comments (e.g. "hhh x 3") into one. */
+	mergeDuplicates: boolean;
+	/** Hide comments matching these keywords (semicolon-separated). */
+	blockWords: string;
 }
 
 export const DEFAULT_DANMAKU_SETTINGS: DanmakuSettings = {
@@ -37,6 +45,10 @@ export const DEFAULT_DANMAKU_SETTINGS: DanmakuSettings = {
 	opacity: 0.9,
 	area: 0.7,
 	speed: 1.0,
+	maxOnScreen: 0,
+	outline: true,
+	mergeDuplicates: false,
+	blockWords: "",
 };
 
 const DANMAKU_SETTINGS_KEY = "blink-danmaku-settings";
@@ -307,7 +319,10 @@ function decodeText(raw: string): string {
 }
 
 /** Parse the plugin's Bilibili XML. Advanced comments (mode 7/8) are skipped. */
-export function parseDanmakuXml(xml: string): DanmakuComment[] {
+export function parseDanmakuXml(
+	xml: string,
+	options?: { mergeDuplicates?: boolean },
+): DanmakuComment[] {
 	const comments: DanmakuComment[] = [];
 	COMMENT_RE.lastIndex = 0;
 	let match: RegExpExecArray | null;
@@ -346,7 +361,45 @@ export function parseDanmakuXml(xml: string): DanmakuComment[] {
 		});
 	}
 	comments.sort((a, b) => a.time - b.time);
-	return comments;
+	return options?.mergeDuplicates
+		? mergeDuplicateComments(comments)
+		: comments;
+}
+
+/**
+ * Collapse runs of the same text within a 5-second window into a single
+ * comment with a "x N" suffix. Runs are counted per mode so a top comment
+ * does not absorb a scroll one.
+ */
+export function mergeDuplicateComments(
+	comments: DanmakuComment[],
+): DanmakuComment[] {
+	const merged: DanmakuComment[] = [];
+	let index = 0;
+	while (index < comments.length) {
+		const current = comments[index];
+		let count = 1;
+		let look = index + 1;
+		while (
+			look < comments.length &&
+			comments[look].text === current.text &&
+			comments[look].mode === current.mode &&
+			comments[look].time - comments[look - 1].time <= 5
+		) {
+			count += 1;
+			look += 1;
+		}
+		if (count > 1) {
+			merged.push({
+				...current,
+				text: `${current.text} x ${count}`,
+			});
+		} else {
+			merged.push(current);
+		}
+		index = look;
+	}
+	return merged;
 }
 
 const LANE_SPACING = 1.4;
@@ -497,13 +550,23 @@ export class DanmakuRenderer {
 		const topPadding = fontSize * 0.4;
 
 		// Spawn comments whose time has arrived.
+		const blockList = this.settings.blockWords
+			.split(/[;；\n]/)
+			.map((word) => word.trim())
+			.filter(Boolean);
+		const maxOnScreen =
+			this.settings.maxOnScreen > 0 ? this.settings.maxOnScreen : Number.POSITIVE_INFINITY;
 		let spawned = 0;
 		while (
 			this.cursor < this.comments.length &&
 			this.comments[this.cursor].time <= videoTime
 		) {
-			if (spawned < MAX_SPAWN_PER_TICK) {
-				this.spawn(this.comments[this.cursor], videoTime, laneCount, laneHeight, topPadding);
+			const candidate = this.comments[this.cursor];
+			const blocked =
+				blockList.length > 0 && blockList.some((word) => candidate.text.includes(word));
+			const saturated = this.active.length >= maxOnScreen;
+			if (!blocked && !saturated && spawned < MAX_SPAWN_PER_TICK) {
+				this.spawn(candidate, videoTime, laneCount, laneHeight, topPadding);
 				spawned += 1;
 			}
 			this.cursor += 1;
@@ -531,22 +594,29 @@ export class DanmakuRenderer {
 		this.ctx.font = `500 ${fontSize}px "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif`;
 		this.ctx.globalAlpha = this.settings.opacity;
 
+		let x = entry.x;
 		if (entry.comment.mode === "scroll") {
 			const duration = SCROLL_DURATION / Math.max(0.1, this.settings.speed);
 			const progress = elapsed / duration;
-			const x = this.width - progress * (this.width + entry.measured.width);
-			this.ctx.fillStyle = entry.comment.color;
-			this.ctx.shadowColor = "rgba(0,0,0,0.8)";
-			this.ctx.shadowBlur = 2;
-			this.ctx.fillText(entry.comment.text, x, entry.y);
-			this.ctx.shadowBlur = 0;
-		} else {
-			this.ctx.fillStyle = entry.comment.color;
-			this.ctx.shadowColor = "rgba(0,0,0,0.8)";
-			this.ctx.shadowBlur = 2;
-			this.ctx.fillText(entry.comment.text, entry.x, entry.y);
-			this.ctx.shadowBlur = 0;
+			x = this.width - progress * (this.width + entry.measured.width);
 		}
+
+		if (this.settings.outline) {
+			// Stroke first, then fill on top: a crisp outline that survives
+			// bright scenes, cheaper than blurred shadows in CanvasKit-style
+			// rasterizers.
+			this.ctx.lineWidth = Math.max(2, fontSize / 12);
+			this.ctx.strokeStyle = "rgba(0,0,0,0.85)";
+			this.ctx.lineJoin = "round";
+			this.ctx.strokeText(entry.comment.text, x, entry.y);
+		} else {
+			this.ctx.shadowColor = "rgba(0,0,0,0.8)";
+			this.ctx.shadowBlur = 2;
+		}
+
+		this.ctx.fillStyle = entry.comment.color;
+		this.ctx.fillText(entry.comment.text, x, entry.y);
+		this.ctx.shadowBlur = 0;
 		this.ctx.globalAlpha = 1;
 	}
 

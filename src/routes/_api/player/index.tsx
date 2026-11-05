@@ -546,7 +546,16 @@ export function VideoPlayer() {
 		}
 
 		const onSettingsChanged = () => {
-			renderer?.setSettings(loadDanmakuSettings());
+			const next = loadDanmakuSettings();
+			renderer?.setSettings(next);
+			// mergeDuplicates changes the parsed comment list itself.
+			if (lastXml && renderer) {
+				renderer.setComments(
+					parseDanmakuXml(lastXml, {
+						mergeDuplicates: next.mergeDuplicates,
+					}),
+				);
+			}
 		};
 		window.addEventListener("blink-danmaku-settings", onSettingsChanged);
 
@@ -557,10 +566,18 @@ export function VideoPlayer() {
 			season: item?.ParentIndexNumber ?? 0,
 			episode: item?.IndexNumber ?? undefined,
 		};
+		let lastXml: string | null = null;
 		fetchDanmakuOnline(query)
 			.then((xml) => {
+				lastXml = xml;
 				if (cancelled || !renderer) return;
-				renderer.setComments(xml ? parseDanmakuXml(xml) : []);
+				renderer.setComments(
+					xml
+						? parseDanmakuXml(xml, {
+								mergeDuplicates: loadDanmakuSettings().mergeDuplicates,
+							})
+						: [],
+				);
 			})
 			.catch(() => {
 				/* no danmaku for this item */
